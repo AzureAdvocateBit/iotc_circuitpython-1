@@ -50,6 +50,8 @@ from adafruit_minimqtt import MQTT
 import adafruit_esp32spi.adafruit_esp32spi_socket as socket
 
 def _createMQTTClient(__self, username, passwd):
+    print('User: ', username)
+    print('Password: ', passwd)
     __self._mqtts = MQTT(socket,
                          broker=__self._hostname,
                          username=username,
@@ -269,7 +271,7 @@ class Device:
         del self._messages[str(msgid)]
 
   def _gen_sas_token(self, hub_host, device_name, key):
-    token_expiry = int(time.time() + self._tokenExpires)
+    token_expiry = int(connection.get_time() + self._tokenExpires)
     uri = hub_host + "%2Fdevices%2F" + device_name
     signed_hmac_sha256 = self._computeDrivedSymmetricKey(key, uri + "\n" + str(token_expiry))
     signature = _quote(signed_hmac_sha256, '~()*!.\'')
