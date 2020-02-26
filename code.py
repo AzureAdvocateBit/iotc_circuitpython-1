@@ -1,6 +1,9 @@
 import board, busio
 import adafruit_requests as requests
 import adafruit_hashlib as hashlib
+import adafruit_logging as logging
+from adafruit_minimqtt import MQTT
+import adafruit_esp32spi.adafruit_esp32spi_socket as socket
 from connection import Connection
 from secrets import secrets
 import time
@@ -9,9 +12,49 @@ import hmac
 import parse
 import json
 import random
+import neopixel
 
 connection = None
 wifi_manager = None
+
+class IOTCallbackInfo:
+  def __init__(self, client, eventName, payload, tag, status, msgid):
+    self._client = client
+    self._eventName = eventName
+    self._payload = payload
+    self._tag = tag
+    self._status = status
+    self._responseCode = None
+    self._responseMessage = None
+    self._msgid = msgid
+
+  def setResponse(self, responseCode, responseMessage):
+    self._responseCode = responseCode
+    self._responseMessage = responseMessage
+
+  def getClient(self):
+    return self._client
+
+  def getEventName(self):
+    return self._eventName
+
+  def getPayload(self):
+    return self._payload
+
+  def getTag(self):
+    return self._tag
+
+  def getStatusCode(self):
+    return self._status
+
+  def getResponseCode(self):
+    return self._responseCode
+
+  def getResponseMessage(self):
+    return self._responseMessage
+
+  def getMessageId(self):
+    return self._msgid
 
 class IOTConnectType:
   IOTC_CONNECT_SYMM_KEY  = 1
@@ -52,9 +95,6 @@ def MAKE_CALLBACK(client, eventName, payload, tag, status, msgid = None):
 def _quote(a, b):
   return parse.quote(a, safe=b)
 
-from adafruit_minimqtt import MQTT
-import adafruit_esp32spi.adafruit_esp32spi_socket as socket
-
 def _createMQTTClient(__self, username, passwd):
     print('User: ', username)
     print('Password: ', passwd)
@@ -66,7 +106,10 @@ def _createMQTTClient(__self, username, passwd):
                          port=8883,
                          keep_alive=120,
                          is_ssl=True,
-                         client_id=__self._deviceId)
+                         client_id=__self._deviceId,
+                         log=True)
+
+    __self._mqtts.logger.setLevel(logging.DEBUG)
 
     #__self._mqtts = mqtt.Client(client_id=__self._deviceId, protocol=mqtt.MQTTv311)
     __self._mqtts.on_connect = __self._onConnect
@@ -184,26 +227,71 @@ class Device:
       self._mqttConnected = True
     self._auth_response_received = True
 
-  def _onMessage(self, client, _, data):
-    topic = ""
-    msg = None
-    if data == None:
-      LOG_IOTC("WARNING: (_onMessage) data is None.")
+  def _echoDesired(self, msg, topic):
+    LOG_IOTC("- iotc :: _echoDesired :: " + topic, IOTLogLevel.IOTC_LOGGING_ALL)
+    obj = None
+
+    try:
+      obj = json.loads(msg)
+    except Exception as e:
+      LOG_IOTC("ERROR: JSON parse for SettingsUpdated message object has failed. => " + msg + " => " + str(e))
       return
 
-    LOG_IOTC("- iotc :: _onMessage :: topic(" + str(data.topic) + ") payload(" + str(data.payload) + ")", IOTLogLevel.IOTC_LOGGING_ALL)
+    version = None
+    if 'desired' in obj:
+      obj = obj['desired']
 
-    if data.payload != None:
-      try:
-        msg = data.payload.decode("utf-8")
-      except:
-        msg = str(data.payload)
+    if not '$version' in obj:
+      LOG_IOTC("ERROR: Unexpected payload for settings update => " + msg)
+      return 1
 
-    if data.topic != None:
+    version = obj['$version']
+
+    for attr, value in obj.items():
+      if attr != '$version':
+        try:
+          eventValue = json.loads(json.dumps(value))
+          if version != None:
+            eventValue['$version'] = version
+        except:
+          continue
+
+        ret = MAKE_CALLBACK(self, "SettingsUpdated", json.dumps(eventValue), attr, 0)
+
+        if not topic.startswith('$iothub/twin/res/200/?$rid=') and version != None:
+          ret_code = 200
+          ret_message = "completed"
+          if ret.getResponseCode() != None:
+            ret_code = ret.getResponseCode()
+          if ret.getResponseMessage() != None:
+            ret_message = ret.getResponseMessage()
+
+          value["statusCode"] = ret_code
+          value["status"] = ret_message
+          value["desiredVersion"] = version
+          wrapper = {}
+          wrapper[attr] = value
+          msg = json.dumps(wrapper)
+          topic = '$iothub/twin/PATCH/properties/reported/?$rid={}'.format(int(time.time()))
+          self._sendCommon(topic, msg, True)
+
+  def _onMessage(self, client, msg_topic, payload):
+    topic = ""
+    msg = None
+
+    LOG_IOTC("- iotc :: _onMessage :: topic(" + str(msg_topic) + ") payload(" + str(payload) + ")", IOTLogLevel.IOTC_LOGGING_ALL)
+
+    if payload != None:
       try:
-        topic = data.topic.decode("utf-8")
+        msg = payload.decode("utf-8")
       except:
-        topic = str(data.topic)
+        msg = str(payload)
+
+    if msg_topic != None:
+      try:
+        topic = msg_topic.decode("utf-8")
+      except:
+        topic = str(msg_topic)
 
     if topic.startswith('$iothub/'): # twin
       # DO NOT need to echo twin response since IOTC api takes care of the desired messages internally
@@ -234,9 +322,7 @@ class Device:
 
         next_topic = '$iothub/methods/res/{}/?$rid={}'.format(ret_code, method_id)
         LOG_IOTC("C2D: => " + next_topic + " with data " + ret_message  + " and name => " + method_name, IOTLogLevel.IOTC_LOGGING_ALL)
-        (result, msg_id) = self._mqtts.publish(next_topic, ret_message, qos=gQOS_LEVEL)
-        if result != MQTT_SUCCESS:
-          LOG_IOTC("ERROR: (send method callback) failed to send. MQTT client return value: " + str(result))
+        self._mqtts.publish(next_topic, ret_message, qos=gQOS_LEVEL)
       else:
         if not topic.startswith('$iothub/twin/res/'): # not twin response
           LOG_IOTC('ERROR: unknown twin! {} - {}'.format(topic, msg))
@@ -301,6 +387,25 @@ class Device:
 
   def sendEvent(self, data):
     return self.sendTelemetry(data)
+
+  def sendProperty(self, data):
+    LOG_IOTC("- iotc :: sendProperty :: " + data, IOTLogLevel.IOTC_LOGGING_ALL)
+    topic = '$iothub/twin/PATCH/properties/reported/?$rid={}'.format(int(connection.get_time()))
+
+    return self._sendCommon(topic, data)
+
+  def disconnect(self):
+    if not self.isConnected():
+      return
+
+    LOG_IOTC("- iotc :: disconnect :: ", IOTLogLevel.IOTC_LOGGING_ALL)
+    self._mqttConnected = False
+    self._mqtts.disconnect()
+    return 0
+
+  def on(self, eventName, callback):
+    self._events[eventName] = callback
+    return 0
 
   def _gen_sas_token(self, hub_host, device_name, key):
     token_expiry = int(connection.get_time() + self._tokenExpires)
@@ -419,9 +524,40 @@ class Device:
   def doNext(self, idleTime=1):
     if not self.isConnected():
       return
+
+    self._mqtts.loop()
     time.sleep(idleTime)
 
 
+
+
+
+neopixels = neopixel.NeoPixel(board.NEOPIXEL, 5, brightness=0.2,
+                              auto_write=False, pixel_order=neopixel.GRB)
+
+is_on = False
+
+def onconnect(info):
+    print("- [onconnect] => status:" + str(info.getStatusCode()))
+
+def onmessagesent(info):
+    print("\t- [onmessagesent] => " + str(info.getPayload()))
+
+def oncommand(info):
+    global is_on
+    print("- [oncommand] => " + info.getTag() + " => " + str(info.getPayload()))
+
+    if is_on:
+        neopixels[0] = (0, 0, 0)
+        neopixels.show()
+        is_on = False
+    else:
+        neopixels[0] = (255, 255, 255)
+        neopixels.show()
+        is_on = True
+
+def onsettingsupdated(info):
+    print("- [onsettingsupdated] => " + info.getTag() + " => " + info.getPayload())
 
 
 spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
@@ -438,10 +574,15 @@ my_device = Device(id_scope, primary_key, device_id, IOTConnectType.IOTC_CONNECT
 
 my_device.connect()
 
+my_device.on("ConnectionStatus", onconnect)
+my_device.on("MessageSent", onmessagesent)
+my_device.on("Command", oncommand)
+my_device.on("SettingsUpdated", onsettingsupdated)
+
 while my_device.isConnected():
     my_device.doNext() # do the async work needed to be done for MQTT
 
-    state = {
-        "value": random.randint(0, 1024)
-    }
-    my_device.sendState(json.dumps(state))
+    # state = {
+    #     "value": random.randint(0, 1024)
+    # }
+    # my_device.sendState(json.dumps(state))

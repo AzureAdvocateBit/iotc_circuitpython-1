@@ -1,5 +1,4 @@
 import board, busio
-import neopixel
 import json
 from secrets import secrets
 from digitalio import DigitalInOut
@@ -8,8 +7,6 @@ import adafruit_esp32spi.adafruit_esp32spi_socket as socket
 from adafruit_esp32spi import adafruit_esp32spi, adafruit_esp32spi_wifimanager
 
 class Connection:
-    __status_light = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.2)
-
     def __connect(self, spi, cs, ready, reset, log):
         esp = adafruit_esp32spi.ESP_SPIcontrol(spi, cs, ready, reset)
 
@@ -31,7 +28,7 @@ class Connection:
             print("Connected to", str(esp.ssid, 'utf-8'), "\tRSSI:", esp.rssi)
             print("My IP address is", esp.pretty_ip(esp.ip_address))
         
-        self.__wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, self.__status_light)
+        self.__wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets)
 
     def connect(self, spi, log = False):
         try:
