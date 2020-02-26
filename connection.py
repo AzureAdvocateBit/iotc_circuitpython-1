@@ -49,13 +49,21 @@ class Connection:
     
     def get_time(self, log = False):
         url = 'http://worldtimeapi.org/api/ip'
-        response = requests.get(url)
-        response_json = json.loads(response.text)
-        time_string = response_json['unixtime']
+        has_time = False
 
-        if  log:
-            print('time:', time_string)
+        while not has_time:
+            try:
+                response = requests.get(url)
+                response_json = json.loads(response.text)
+                time_string = response_json['unixtime']
+                has_time = True
 
-        return int(time_string)
-        
+                if  log:
+                    print('time:', time_string)
+
+                return int(time_string)
+            except RuntimeError as e:
+                if log:
+                    print("could not connect to AP, retrying: ",e)
+                continue        
 

@@ -8,6 +8,7 @@ import base64
 import hmac
 import parse
 import json
+import random
 
 connection = None
 wifi_manager = None
@@ -16,12 +17,17 @@ class IOTConnectType:
   IOTC_CONNECT_SYMM_KEY  = 1
   #IOTC_CONNECT_X509_CERT = 2
 
+class IOTQosLevel:
+  IOTC_QOS_AT_MOST_ONCE  = 0
+  IOTC_QOS_AT_LEAST_ONCE = 1
+
 class IOTLogLevel:
   IOTC_LOGGING_DISABLED =  1
   IOTC_LOGGING_API_ONLY =  2
   IOTC_LOGGING_ALL      = 16
 
 gLOG_LEVEL = IOTLogLevel.IOTC_LOGGING_ALL
+gQOS_LEVEL = IOTQosLevel.IOTC_QOS_AT_MOST_ONCE
 
 def LOG_IOTC(msg, level=IOTLogLevel.IOTC_LOGGING_API_ONLY):
   global gLOG_LEVEL
@@ -260,7 +266,7 @@ class Device:
     if rc != 5:
       MAKE_CALLBACK(self, "ConnectionStatus", userdata, "", rc)
 
-  def _onPublish(self, client, data, msgid):
+  def _onPublish(self, client, data, topic, msgid):
     LOG_IOTC("- iotc :: _onPublish :: " + str(data), IOTLogLevel.IOTC_LOGGING_ALL)
     if data == None:
       data = ""
@@ -269,6 +275,32 @@ class Device:
       MAKE_CALLBACK(self, "MessageSent", self._messages[str(msgid)], data, 0)
       if (str(msgid) in self._messages):
         del self._messages[str(msgid)]
+
+  def _sendCommon(self, topic, data):
+    self._mqtts.publish(topic, data, qos=gQOS_LEVEL)
+    return 0
+
+  
+  def sendTelemetry(self, data, systemProperties = None):
+    LOG_IOTC("- iotc :: sendTelemetry :: " + data, IOTLogLevel.IOTC_LOGGING_ALL)
+    topic = 'devices/{}/messages/events/'.format(self._deviceId)
+
+    if systemProperties != None:
+      firstProp = True
+      for prop in systemProperties:
+        if not firstProp:
+          topic += "&"
+        else:
+          firstProp = False
+        topic += prop + '=' + str(systemProperties[prop])
+
+    return self._sendCommon(topic, data)
+
+  def sendState(self, data):
+    return self.sendTelemetry(data)
+
+  def sendEvent(self, data):
+    return self.sendTelemetry(data)
 
   def _gen_sas_token(self, hub_host, device_name, key):
     token_expiry = int(connection.get_time() + self._tokenExpires)
@@ -297,15 +329,15 @@ class Device:
     _createMQTTClient(self, username, passwd)
 
     LOG_IOTC(" - iotc :: _mqttconnect :: created mqtt client. connecting..", IOTLogLevel.IOTC_LOGGING_ALL)
-    if mqtt != None:
-      while self._auth_response_received == None:
-        self.doNext()
-      LOG_IOTC(" - iotc :: _mqttconnect :: on_connect must be fired. Connected ? " + str(self.isConnected()), IOTLogLevel.IOTC_LOGGING_ALL)
-      if not self.isConnected():
-        return 1
-    else:
-      self._mqttConnected = True
-      self._auth_response_received = True
+    #if mqtt != None:
+    while self._auth_response_received == None:
+      self.doNext()
+    LOG_IOTC(" - iotc :: _mqttconnect :: on_connect must be fired. Connected ? " + str(self.isConnected()), IOTLogLevel.IOTC_LOGGING_ALL)
+    if not self.isConnected():
+      return 1
+    # else:
+    #   self._mqttConnected = True
+    #   self._auth_response_received = True
 
     self._mqtts.subscribe('devices/{}/messages/events/#'.format(self._deviceId))
     self._mqtts.subscribe('devices/{}/messages/deviceBound/#'.format(self._deviceId))
@@ -319,6 +351,11 @@ class Device:
       return 1
 
     return 0
+
+  def getDeviceSettings(self):
+    LOG_IOTC("- iotc :: getDeviceSettings :: ", IOTLogLevel.IOTC_LOGGING_ALL)
+    self.doNext()
+    return self._sendCommon("$iothub/twin/GET/?$rid=0", " ")
 
   def connect(self, hostName = None):
     LOG_IOTC("- iotc :: connect :: ", IOTLogLevel.IOTC_LOGGING_ALL)
@@ -376,6 +413,14 @@ class Device:
       time.sleep(1)
       return self._loopAssign(data['operationId'], headers)
 
+  def isConnected(self):
+    return self._mqttConnected
+
+  def doNext(self, idleTime=1):
+    if not self.isConnected():
+      return
+    time.sleep(idleTime)
+
 
 
 
@@ -392,3 +437,11 @@ primary_key = secrets['key']
 my_device = Device(id_scope, primary_key, device_id, IOTConnectType.IOTC_CONNECT_SYMM_KEY)
 
 my_device.connect()
+
+while my_device.isConnected():
+    my_device.doNext() # do the async work needed to be done for MQTT
+
+    state = {
+        "value": random.randint(0, 1024)
+    }
+    my_device.sendState(json.dumps(state))
