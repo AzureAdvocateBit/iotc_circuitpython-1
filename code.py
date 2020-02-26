@@ -582,7 +582,7 @@ my_device.on("SettingsUpdated", onsettingsupdated)
 while my_device.isConnected():
     my_device.doNext() # do the async work needed to be done for MQTT
 
-    # state = {
-    #     "value": random.randint(0, 1024)
-    # }
-    # my_device.sendState(json.dumps(state))
+    state = {
+        "value": random.randint(0, 1024)
+    }
+    my_device.sendState(json.dumps(state))
