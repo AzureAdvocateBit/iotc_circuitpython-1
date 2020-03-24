@@ -36,6 +36,7 @@ You will need an Adafruit board with WiFi connectivity via an ESP32 chip, either
     | adafruit_logging.mpy  | File   |
     | adafruit_binascii.mpy | File   |
     | adafruit_requests.mpy | File   |
+    | adafruit_ntp.mpy      | File   |
     | adafruit_hashlib      | Folder |
     | adafruit_esp32spi     | Folder |
     | adafruit_bus_device   | Folder |
