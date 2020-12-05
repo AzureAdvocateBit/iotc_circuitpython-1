@@ -13,7 +13,7 @@ You will need an Adafruit board with WiFi connectivity via an ESP32 chip, either
 
 ## Usage
 
-* Create an Azure IoT Central application, with a device template and a device. You can learn how to do this in the [Azure IoT Central docs](https://docs.microsoft.com/azure/iot-central/core/quick-deploy-iot-central/?WT.mc_id=iotc_circuitpython-github-jabenn). This application will need:
+* Create an Azure IoT Central application, with a device template and a device. You can learn how to do this in the [Azure IoT Central docs](https://docs.microsoft.com/azure/iot-central/core/quick-deploy-iot-central/?WT.mc_id=academic-0000-jabenn). This application will need:
 
   * A device template with an interface containing:
 
